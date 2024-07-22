@@ -1,7 +1,17 @@
-Program IGC_Annex_A_scoring_2022;
+Program IGC_Annex_A_scoring_WGC2023;
 // Collaborate on writing scripts at Github:
 // https://github.com/naviter/seeyou_competition_scripts/
 //
+// Version 10.0 Date 2023.10.30 by Neil Campbell v3_1
+//   . Incorporate changes required for Annex A 2023 Edition and WGC 2023 Local Procedures
+//       . Support for 7.4.5b Starting Procedures - Pre-start altitude
+//       . enter "PreStartAlt=nnn" in DayTag where nnn is altitude in m
+//   . User warning for below minimum height above airfield elevation - copy Ian's from Australia Rules
+//   . fix calculation of n3 to only count actual finishers.
+//   . include newline between user warnings to improve readability
+//   . ignore PEV markers after start
+//
+
 // Version 9.03, Date 19.04.2023 by Andrej Kolar
 //   . Renamed Vo to V0 for consistency with T0 and D0
 // Version 9.02, Date 17.07.2022 by Andrej Kolar
@@ -76,6 +86,17 @@ var
   Ignore_PEV,PEVStartNotValid : boolean;  
   Pevcount, LastPev  : Integer; 
 
+  //Prestart Altitude 
+  PreStartAltLimit, NbrFixes,  MinPreStartAltTime : Integer;
+  MinPreStartAlt : Double;
+  PreStartInfo : string;
+  PreStartLimitOK : boolean;
+
+  //below altitude on task
+  BelowAltFound : boolean;
+  FixDuration, LaunchAboveAltFix, LastFixTime, FGAboveAltFix, LowPointTsec : Integer;
+  MinimumAlt, LowPoint : Double;
+
 Function MinValue( a,b,c : double ) : double;
 var m : double;
 begin
@@ -127,9 +148,8 @@ begin
     ReadDayTagParameter := default;            // string not found
 end;
 
-
+//  Main Code
 begin
-
   // initial checks
   if GetArrayLength(Pilots) <= 1 then
     exit;
@@ -200,6 +220,22 @@ begin
     PEVWaitTime:=0;
     PEVStartWindow:=0;
     end;  
+
+  // Prestart Altitude
+  PreStartAltLimit := Trunc(ReadDayTagParameter('PRESTARTALT',0));		// Prestart altitude in m >0
+  if PreStartAltLimit > 0 then
+  begin
+    Info3 := Info3 + 'PreStart Alt = '+IntToStr(PreStartAltLimit)+'m, ';
+  end;
+
+
+  // altitude less than minimum altitude
+  MinimumAlt := Trunc(ReadDayTagParameter('MINIMUMALT',0));	
+  if MinimumAlt > 0 then
+  begin
+    Info3 := Info3 + 'Minimum Alt = '+FloatToStr(MinimumAlt)+'m, ';
+  end;
+
 
   // Calculation of basic parameters
   N := 0;  // Number of pilots having had a competition launch
@@ -303,7 +339,8 @@ begin
   begin
     if not Pilots[i].isHC Then
     begin
-      n3 := n3+1;
+      // n3 to count only finishers...
+      if Pilots[i].finish > 0 Then n3 := n3+1;
       if Pilots[i].speed*Hmin/Pilots[i].Hcap > (2.0/3.0*V0) Then
       begin
         n2 := n2+1;
@@ -393,7 +430,7 @@ begin
 
         for j:=0 to GetArrayLength(Pilots[i].Markers)-1 do
         begin
-          Ignore_Pev:= ((Pilots[i].Markers[j].Tsec-LastPev<=PevStartTimeBuffer) and (Lastpev>0)) or (Pevcount=3); // TODO: Also ignore PEV if PEV time is greater than start time.
+          Ignore_Pev:= ((Pilots[i].Markers[j].Tsec-LastPev<=PevStartTimeBuffer) and (Lastpev>0)) or (Pevcount=3) or (Pilots[i].Markers[j].Tsec > Pilots[i].Start); 
           if Ignore_Pev Then
              begin
                if (ALLUserWrng>=1)Then PevWarning := PevWarning + ' (PEV ignored='+ GetTimestring(Pilots[i].Markers[j].Tsec) +'!), '
@@ -421,7 +458,7 @@ begin
 
         Pilots[i].Warning:= PevWarning;   
       end;
-      if Pilots[i].start<Task.NoStartBeforeTime then Pilots[i].Warning :=Pilots[i].Warning+' Start='+GetTimestring(Trunc(Pilots[i].start))+' before gate opens!'+', ';     
+      if Pilots[i].start<Task.NoStartBeforeTime then Pilots[i].Warning :=Pilots[i].Warning+ #10'Start='+GetTimestring(Trunc(Pilots[i].start))+' before gate opens!'+', ';     
     end;
   end;
  
@@ -445,8 +482,153 @@ begin
 
       if PilotStartSpeedfixes>0 then 
 	    PilotStartSpeed := PilotStartSpeedSum / PilotStartSpeedFixes;
-      if (Round(PilotStartSpeed*3.6) > MaxStartSpeed) Then
-	    Pilots[i].Warning := Pilots[i].Warning+ ' Startspeed=' + FloatToStr(Round(PilotStartSpeed*3.6)) + ' km/h-> ' + FloatToStr(Round(PilotStartSpeed*3.6)- MaxStartSpeed) + ' km/h too fast' ;
+      if (Round(PilotStartSpeed*3.6) > MaxStartSpeed) Then begin
+        if Pilots[i].Warning <> '' then Pilots[i].Warning := Pilots[i].Warning+ #10;
+	      Pilots[i].Warning := Pilots[i].Warning+ 'Startspeed=' + FloatToStr(Round(PilotStartSpeed*3.6)) + ' km/h-> ' + FloatToStr(Round(PilotStartSpeed*3.6)- MaxStartSpeed) + ' km/h too fast' ;
+      end;
     end;
   end;
+
+  // Support for 7.4.5b Starting Procedures - Pre-start altitude
+  // 
+  if PreStartAltLimit > 0 then
+  begin
+    for i:=0 to GetArrayLength(Pilots)-1 do
+    begin
+      //if pilot has started check prestart    
+      if (Pilots[i].start > 0) Then
+      begin
+        PreStartLimitOK := FALSE;
+        j := 0;
+        NbrFixes := GetArrayLength(Pilots[i].Fixes)-1;
+        //skip through to start gate open
+        if NbrFixes > 0 then
+        begin
+          while  (j < NbrFixes) and (Pilots[i].Fixes[j].TSec < Task.NoStartBeforeTime) do 
+          begin
+            j := J + 1;
+          end;
+          //now check for lowest altitude from start gate open to start
+          if j <= NbrFixes then 
+          begin
+            MinPreStartAlt := Pilots[i].Fixes[j].AltQnh;
+            MinPreStartAltTime := Pilots[i].Fixes[j].TSec;
+          end;
+          while (Pilots[i].Fixes[j].TSec <= Pilots[i].start) and (j < NbrFixes) and not(PreStartLimitOK) do 
+          begin
+            if Pilots[i].Fixes[j].AltQnh < MinPreStartAlt then 
+            begin
+              MinPreStartAlt := Pilots[i].Fixes[j].AltQnh;
+              MinPreStartAltTime := Pilots[i].Fixes[j].TSec;
+            end;
+            if  Pilots[i].Fixes[j].AltQnh < PreStartAltLimit then 
+            begin
+              PreStartLimitOK := TRUE;
+            end;
+            j:=j+1
+          end;
+          if not(PreStartLimitOK) then 
+          begin
+            if Pilots[i].Warning <> '' then Pilots[i].Warning := Pilots[i].Warning + #10;
+            Pilots[i].warning := Pilots[i].warning + 'Invalid PreStart Alt: ' + FloatToStr(round(MinPreStartAlt)) ;
+            Pilots[i].warning := Pilots[i].warning + 'm at time: '  + GetTimestring(MinPreStartAltTime);
+          end;
+        end;
+      end; 
+    end;
+  end;
+
+  // altitude less than minimum altitude
+  if (MinimumAlt <> 0 )  then
+  begin
+   // showmessage('start minimum alt.  MinAlt=' + FloatToStr(MinimumAlt));
+    
+    for i:=0 to GetArrayLength(Pilots)-1 do
+    begin
+        NbrFixes := GetArrayLength(Pilots[i].Fixes);
+        if (NbrFixes > 0) then 
+        begin
+        // walk through until above minimum altitude for > 60 seconds on initial launch
+          
+          //showmessage('pilot:' + IntToStr(i) + ' NBRFIXES = ' + IntToStr(NbrFixes));
+          j:=0;
+          FixDuration := 0;
+          LastFixTime := Pilots[i].Fixes[j].Tsec;
+          while ((j < NbrFixes - 1) and (FixDuration < 60)) do 
+          begin
+            if (Pilots[i].Fixes[j].AltQnh >= MinimumAlt) then
+            begin
+              FixDuration := FixDuration + (Pilots[i].Fixes[j].Tsec - LastFixTime); 
+            end
+            else begin
+              FixDuration := 0;
+            end;
+            LastFixTime := Pilots[i].Fixes[j].Tsec;
+            j := j + 1;
+          end;
+          if (FixDuration >= 60) and (j < NbrFixes - 1) then
+          begin
+            LaunchAboveAltFix := j;
+            //showmessage('pilot:' + IntToStr(i) + ' LaunchAboveAltFix = ' + IntToStr(LaunchAboveAltFix));
+
+            // walk backward through until above minimum altitude for > 60 seconds on final glide
+            j:=NbrFixes - 1;
+            FixDuration := 0;
+            if (j < NbrFixes - 1) then LastFixTime := Pilots[i].Fixes[j].Tsec;
+            while ((j > LaunchAboveAltFix) and (FixDuration < 60)) do 
+            begin
+              if (Pilots[i].Fixes[j].AltQnh >= MinimumAlt) then
+              begin
+                FixDuration := FixDuration + (LastFixTime - Pilots[i].Fixes[j].Tsec ); 
+              end
+              else begin
+                FixDuration := 0;
+              end;
+              LastFixTime := Pilots[i].Fixes[j].Tsec;
+              j := j - 1;
+            end;
+            if ((FixDuration >= 60) and (j > LaunchAboveAltFix)) then
+            begin
+              FGAboveAltFix := j;
+              //showmessage('pilot:' + IntToStr(i) + ' FGAboveAltFix = ' + IntToStr(FGAboveAltFix));
+              // check between LaunchAboveAltFix to FGAboveAltFix to find points below 
+
+              j := LaunchAboveAltFix;
+
+              LowPoint := Pilots[i].Fixes[j].AltQnh;
+              BelowAltFound := FALSE;
+              //showmessage('pilot:' + IntToStr(i) + ' InitialLowPoint = ' + FloatToStr(LowPoint));
+              while ((j < FGAboveAltFix) and Not(BelowAltFound)) do
+              begin
+                // showmessage('i:' + inttostr(i));
+                // showmessage('j:' + inttostr(j));
+                // showmessage('altqnh:' + floattostr(Pilots[i].Fixes[j].AltQnh));
+                // showmessage('lowpoint:' + floattostr(LowPoint));
+                
+                if (j <= 0) or (j >=  NbrFixes - 2 ) then showmessage('pilot:' + IntToStr(i) +' bad j:' + inttostr(j) + ' LaunchAboveAltFix = ' + IntToStr(LaunchAboveAltFix) + ' FGAboveAltFix = ' + IntToStr(FGAboveAltFix) + ' NbrFixes' + IntToStr(NbrFixes));
+
+                if (Pilots[i].Fixes[j].AltQnh < LowPoint) then 
+                begin
+                  LowPoint := Pilots[i].Fixes[j].AltQnh;
+                  LowPointTsec := Pilots[i].Fixes[j].Tsec;
+                end;
+                if (Pilots[i].Fixes[j].AltQnh < MinimumAlt) then BelowAltFound := TRUE; 
+                j := j+1;
+              end;
+
+              if (BelowAltFound) then 
+              begin
+                if Pilots[i].Warning <> '' then Pilots[i].Warning := Pilots[i].Warning + #10;
+                Pilots[i].warning := Pilots[i].warning + 'First Below Minimum Alt: ' + FormatFloat('0.0',LowPoint) ;
+                Pilots[i].warning := Pilots[i].warning + 'm at time: '  + GetTimestring(LowPointTsec);
+              end;
+              //showmessage('pilot:' + IntToStr(i) + ' LowPoint = ' + FloatToStr(LowPoint));
+            end;
+          end;
+        end;
+    end;  
+
+    // 
+  end;
+  
 end.
