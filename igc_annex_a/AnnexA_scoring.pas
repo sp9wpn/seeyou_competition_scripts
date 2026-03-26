@@ -489,7 +489,9 @@ begin
                                 * (Pilots[i].start - Pilots[i].Fixes[j-1].Tsec);
 
              if (PilotStartAlt - Pilots[i].FinishAlt > MaxLoH) Then
-               Pilots[i].Warning := Pilots[i].Warning+ ' LoH exceeded (' + IntToStr(Round(PilotStartAlt - Pilots[i].FinishAlt)) + 'm)';
+			 begin
+               Pilots[i].Warning := Pilots[i].Warning+ #10 + 'LoH exceeded (' + IntToStr(Round(PilotStartAlt - Pilots[i].FinishAlt)) + 'm)';
+			 end;
 
              break;
            end;
@@ -520,7 +522,7 @@ begin
 	    PilotStartSpeed := PilotStartSpeedSum / PilotStartSpeedFixes;
       if (Round(PilotStartSpeed*3.6) > MaxStartSpeed) Then begin
         if Pilots[i].Warning <> '' then Pilots[i].Warning := Pilots[i].Warning+ #10;
-	      Pilots[i].Warning := Pilots[i].Warning+ 'Startspeed=' + FloatToStr(Round(PilotStartSpeed*3.6)) + ' km/h-> ' + FloatToStr(Round(PilotStartSpeed*3.6)- MaxStartSpeed) + ' km/h too fast' ;
+	      Pilots[i].Warning := Pilots[i].Warning+ 'Startspeed=' + FloatToStr(Round(PilotStartSpeed*3.6)) + ' km/h-> ' + FloatToStr(Round(PilotStartSpeed*3.6)- MaxStartSpeed) + ' km/h too fast';
       end;
     end;
   end;
