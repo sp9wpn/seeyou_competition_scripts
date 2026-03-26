@@ -1,7 +1,10 @@
-Program IGC_Annex_A_scoring_WGC2023;
+Program IGC_Annex_A_scoring_WGC2026_test;
 // Collaborate on writing scripts at Github:
 // https://github.com/naviter/seeyou_competition_scripts/
 //
+// Version 10.01-beta, Date 2026.03.26 by Wojciech Scigala
+//   . Added Loss of Height check (enter MaxLoH=1000 in DayTag) - requires "expose Fixes" option
+
 // Version 10.0 Date 2023.10.30 by Neil Campbell v3_1
 //   . Incorporate changes required for Annex A 2023 Edition and WGC 2023 Local Procedures
 //       . Support for 7.4.5b Starting Procedures - Pre-start altitude
@@ -96,6 +99,10 @@ var
   BelowAltFound : boolean;
   FixDuration, LaunchAboveAltFix, LastFixTime, FGAboveAltFix, LowPointTsec : Integer;
   MinimumAlt, LowPoint : Double;
+
+  //loss of height
+  MaxLoH : integer;
+  PilotStartAlt : double;
 
 Function MinValue( a,b,c : double ) : double;
 var m : double;
@@ -255,7 +262,7 @@ begin
   end;
   
   // Annex A version 2022 has removed the capability of Hmin in the results. Simply removing Hmin doesn't work for comps where Handicaps are given as 108, 125 etc. Hence this addition.
-  if Hmin >= 500 then Hmin = 1000;                   // Not sure if there are any comps that uses Annex A rules with Handicaps over 10000?
+  if Hmin >= 500 then Hmin := 1000;                   // Not sure if there are any comps that uses Annex A rules with Handicaps over 10000?
   if (Hmin >= 50) and (Hmin < 500) then Hmin := 100; // For comps that use Handicaps typically between 70 and 130
   if (Hmin >= 5) and (Hmin < 50) then Hmin := 10;    // Just in case
   if (Hmin >= 0.5) and (Hmin < 5) then Hmin := 1;    // Typical IGC Annex A comps with handicaps around 1.000
@@ -459,6 +466,35 @@ begin
         Pilots[i].Warning:= PevWarning;   
       end;
       if Pilots[i].start<Task.NoStartBeforeTime then Pilots[i].Warning :=Pilots[i].Warning+ #10'Start='+GetTimestring(Trunc(Pilots[i].start))+' before gate opens!'+', ';     
+    end;
+  end;
+
+// Loss of Height calculation
+  MaxLoH := Trunc(ReadDayTagParameter('MAXLOH',0));
+  if MaxLoH>0 Then
+  begin
+    for i:=0 to GetArrayLength(Pilots)-1 do
+    begin
+      if (Pilots[i].finish > 0) and (Pilots[i].start > 0) Then
+      begin
+         for j := 0 to GetArrayLength(Pilots[i].Fixes)-1 do
+         begin
+           if Pilots[i].Fixes[j].Tsec >= Pilots[i].start Then
+           begin
+             if Pilots[i].Fixes[j].Tsec = Pilots[i].start Then	// exact fix
+               PilotStartAlt := Pilots[i].Fixes[j].AltQnh
+             else
+               PilotStartAlt := Pilots[i].Fixes[j-1].AltQnh
+                                + ((Pilots[i].Fixes[j].AltQnh - Pilots[i].Fixes[j-1].AltQnh)/(Pilots[i].Fixes[j].Tsec - Pilots[i].Fixes[j-1].Tsec))
+                                * (Pilots[i].start - Pilots[i].Fixes[j-1].Tsec);
+
+             if (PilotStartAlt - Pilots[i].FinishAlt > MaxLoH) Then
+               Pilots[i].Warning := Pilots[i].Warning+ ' LoH exceeded (' + IntToStr(Round(PilotStartAlt - Pilots[i].FinishAlt)) + 'm)';
+
+             break;
+           end;
+         end;
+      end;
     end;
   end;
  
